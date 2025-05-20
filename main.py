@@ -1,6 +1,7 @@
 from env import Environment
 #from agent import Agents
-from greedyagent import GreedyAgents as Agents
+from greedyagent import GreedyAgents
+from agent import RandomAgent, Agents
 
 import numpy as np
 
@@ -16,25 +17,33 @@ if __name__=="__main__":
 
     args = parser.parse_args()
     np.random.seed(args.seed)
+    all_reward = []
+    all_delivered = []
+    for i in range(10):
+        env = Environment(map_file=args.map, max_time_steps=args.max_time_steps,
+                        n_robots=args.num_agents, n_packages=args.n_packages,
+                        seed = args.seed)
+        
+        state = env.reset()
+        agents = GreedyAgents()
+        agents.init_agents(state)
+        # print(state)
+        done = False
+        t = 0
+        while not done:
+            actions = agents.get_actions(state)
+            next_state, reward, done, infos = env.step(actions)
+            state = next_state
+            t += 1
 
-    env = Environment(map_file=args.map, max_time_steps=args.max_time_steps,
-                      n_robots=args.num_agents, n_packages=args.n_packages,
-                      seed = args.seed)
-    
-    state = env.reset()
-    agents = Agents()
-    agents.init_agents(state)
-    print(state)
-    #env.render()
-    done = False
-    t = 0
-    while not done:
-        actions = agents.get_actions(state)
-        next_state, reward, done, infos = env.step(actions)
-        state = next_state
-        env.render()
-        t += 1
-
-    print("Episode finished")
-    print("Total reward:", infos['total_reward'])
-    print("Total time steps:", infos['total_time_steps'])
+        print("Episode finished")
+        print("Total reward:", infos['total_reward'])
+        print("Total time steps:", infos['total_time_steps'])
+        delivered_count = sum(1 for pkg in env.packages if pkg.status == 'delivered')
+        print(f"Packages Delivered: {delivered_count}/{env.n_packages}")
+        all_reward.append(env.total_reward)
+        all_delivered.append(delivered_count)
+    print("Average reward:", np.mean(all_reward))
+    print(all_reward)
+    print("Average packages delivered:", np.mean(all_delivered))
+    print(all_delivered)

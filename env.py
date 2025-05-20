@@ -1,4 +1,13 @@
 import numpy as np
+from greedyagent import GreedyAgents
+import numpy as np
+import pygame
+from agent import Agents, RandomAgent
+import numpy as np
+from policy_net import PolicyGradientCNN, ActorCNN
+import torch
+from torch.distributions import Categorical
+# from greedyagent import GreedyAgents
 
 class Robot: 
     def __init__(self, position): 
@@ -357,39 +366,200 @@ class Environment:
             print('\t'.join(str(cell) for cell in row))
         
 
+class EnvironmentVisualizer:
+    def __init__(self, env, cell_size=40, text_panel_height=100, fps=10):
+        """
+        Initializes the Pygame visualizer.
+        :param env: The Environment instance to visualize.
+        :param cell_size: The size of each grid cell in pixels.
+        :param text_panel_height: Height of the panel at the bottom for text info.
+        :param fps: Frames per second for the visualization.
+        """
+        self.env = env
+        self.cell_size = cell_size
+        self.text_panel_height = text_panel_height
+        self.fps = fps
+
+        self.screen_width = self.env.n_cols * self.cell_size
+        self.screen_height = self.env.n_rows * self.cell_size + self.text_panel_height
+
+        pygame.init()
+        self.screen = pygame.display.set_mode((self.screen_width, self.screen_height))
+        pygame.display.set_caption("Multi-Robot Package Delivery")
+        self.clock = pygame.time.Clock()
+
+        # Define colors
+        self.colors = {
+            'black': (0, 0, 0),
+            'white': (255, 255, 255),
+            'gray': (200, 200, 200),
+            'obstacle': (100, 100, 100), # Dark gray
+            'free': (240, 240, 240),     # Light gray
+            'robot': (0, 128, 255),      # Blue
+            'robot_carrying': (0, 255, 0), # Green when carrying
+            'package_waiting': (255, 165, 0), # Orange
+            'package_target': (255, 0, 0), # Red
+            'info_bg': (50, 50, 50), # Dark gray for info panel
+            'info_text': (255, 255, 255) # White text
+        }
+
+        # Define fonts
+        pygame.font.init()
+        self.font = pygame.font.SysFont('Arial', 14)
+        self.small_font = pygame.font.SysFont('Arial', 14)
+
+    def draw(self):
+        """
+        Draws the current state of the environment using Pygame.
+        """
+
+        # Draw the grid
+        for r in range(self.env.n_rows):
+            for c in range(self.env.n_cols):
+                cell_color = self.colors['obstacle'] if self.env.grid[r][c] == 1 else self.colors['free']
+                pygame.draw.rect(self.screen, cell_color,
+                                 (c * self.cell_size, r * self.cell_size, self.cell_size, self.cell_size))
+                # Draw grid lines
+                pygame.draw.rect(self.screen, self.colors['gray'],
+                                 (c * self.cell_size, r * self.cell_size, self.cell_size, self.cell_size), 1) # 1 pixel border
+
+        # Draw package start (waiting) locations and target locations
+        for pkg in self.env.packages:
+             # Draw start location for waiting packages
+             if pkg.status == 'waiting':
+                 start_r, start_c = pkg.start
+                 pygame.draw.circle(self.screen, self.colors['package_waiting'],
+                                    (start_c * self.cell_size + self.cell_size // 2,
+                                     start_r * self.cell_size + self.cell_size // 2),
+                                    self.cell_size // 4) # Draw a circle for package start
+
+                 # Optional: Draw package ID
+                 pkg_text = self.small_font.render(str(pkg.package_id), True, self.colors['black'])
+                 text_rect = pkg_text.get_rect(center=(start_c * self.cell_size + self.cell_size // 2,
+                                                       start_r * self.cell_size + self.cell_size // 2))
+                 self.screen.blit(pkg_text, text_rect)
+
+
+             # Draw target location for all non-delivered packages
+             if pkg.status != 'delivered':
+                 target_r, target_c = pkg.target
+                 # Draw a square outline for target
+                 pygame.draw.rect(self.screen, self.colors['package_target'],
+                                  (target_c * self.cell_size + self.cell_size // 4,
+                                   target_r * self.cell_size + self.cell_size // 4,
+                                   self.cell_size // 2, self.cell_size // 2), 2) # 2 pixel border
+
+        # Draw robots
+        for i, robot in enumerate(self.env.robots):
+            r, c = robot.position
+            robot_color = self.colors['robot_carrying'] if robot.carrying != 0 else self.colors['robot']
+            center_x = c * self.cell_size + self.cell_size // 2
+            center_y = r * self.cell_size + self.cell_size // 2
+            radius = self.cell_size // 3
+            pygame.draw.circle(self.screen, robot_color, (center_x, center_y), radius)
+
+            # Draw robot index
+            robot_text = self.font.render(str(i), True, self.colors['white'] if robot.carrying == 0 else self.colors['black'])
+            text_rect = robot_text.get_rect(center=(center_x, center_y))
+            self.screen.blit(robot_text, text_rect)
+
+
+        # Draw info panel at the bottom
+        info_panel_rect = (0, self.env.n_rows * self.cell_size, self.screen_width, self.text_panel_height)
+        pygame.draw.rect(self.screen, self.colors['info_bg'], info_panel_rect)
+
+        # Display time step
+        time_text = self.font.render(f"Time: {self.env.t}/{self.env.max_time_steps}", True, self.colors['info_text'])
+        self.screen.blit(time_text, (10, self.env.n_rows * self.cell_size + 10))
+
+        # Display total reward
+        reward_text = self.font.render(f"Reward: {self.env.total_reward:.2f}", True, self.colors['info_text'])
+        self.screen.blit(reward_text, (10, self.env.n_rows * self.cell_size + 40))
+
+        # Display package status summary
+        delivered_count = sum(1 for pkg in self.env.packages if pkg.status == 'delivered')
+        in_transit_count = sum(1 for pkg in self.env.packages if pkg.status == 'in_transit')
+        waiting_count = sum(1 for pkg in self.env.packages if pkg.status == 'waiting')
+        package_summary_text = self.font.render(f"Del:{delivered_count} Trans:{in_transit_count} Wait:{waiting_count} Total:{self.env.n_packages}", True, self.colors['info_text'])
+        self.screen.blit(package_summary_text, (self.screen_width // 2, self.env.n_rows * self.cell_size + 10))
+
+
+        # Update the display
+        pygame.display.flip()
+
+    def handle_events(self):
+        """
+        Handles Pygame events like closing the window.
+        :return: True if the simulation should continue, False if Quit event is received.
+        """
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                return False
+        return True
+
+    def tick(self):
+        """
+        Manages the visualization FPS.
+        """
+        self.clock.tick(self.fps)
+
+    def close(self):
+        """
+        Quits Pygame.
+        """
+        pygame.quit()
+
+
 if __name__=="__main__":
-    env = Environment('map.txt', 10, 2, 5)
-    state = env.reset()
-    print("Initial State:", state)
-    print("Initial State:")
-    env.render()
 
-    # Agents
+    map_file = 'map1.txt' # Make sure map5.txt is in the same directory as your script
+
+    env = Environment(map_file, max_time_steps=1000,
+                      n_robots=5, n_packages=100, seed=10)
+
+    # Handle potential map loading failure during init/reset
+    if env.done:
+        print("Environment setup failed. Exiting.")
+        exit()
+
+    # Initialize visualizer
+    visualizer = EnvironmentVisualizer(env, cell_size=50, fps=10) # Adjust cell_size and fps as needed
+
     # Initialize agents
-    from greedyagent import GreedyAgents as Agents
-    agents = Agents()   # You should define a default parameters here
-    agents.init_agents(state) # You have a change to init states which can be used or not. Depend on your choice
+    # Assuming GreedyAgents can take the environment state or similar info to decide actions
+    agents = Agents()
+    initial_state = env.get_state()
+    # Get initial state after env reset has placed robots/packages
+    print(f'package state : {initial_state["packages"]}')
+    agents.init_agents(initial_state)
     print("Agents initialized.")
-    
-    # Example actions for robots
-    list_actions = ['S', 'L', 'R', 'U', 'D']
-    n_robots = len(state['robots'])
-    done = False
-    t = 0
-    while not done:
-        actions = agents.get_actions(state) 
-        state, reward, done, infos = env.step(actions)
-    
-        print("\nState after step:")
-        env.render()
-        print(f"Reward: {reward}, Done: {done}, Infos: {infos}")
-        print("Total Reward:", env.total_reward)
-        print("Time step:", env.t)
-        print("Packages:", state['packages'])
-        print("Robots:", state['robots'])
 
-        # For debug purpose
-        t += 1
-        if t == 100:
-            break
-    
+    running = True
+    done = False
+    state = initial_state # Start with the initial state
+
+    while running and not done:
+
+        # Handle Pygame events (allows closing the window)
+        running = visualizer.handle_events()
+        if not running:
+            break # Exit the main loop if window is closed
+
+        # Get actions from agents
+        actions = agents.get_actions(state)
+
+        # Step the environment
+        state, reward, done, infos = env.step(actions)
+        
+        # Draw the current state
+        visualizer.draw()
+
+        # Control simulation speed
+        visualizer.tick()
+
+    visualizer.close()
+    print("Simulation ended.")
+    print(f"Final Total Reward: {env.total_reward:.2f}")
+    print(f"Total Time Steps: {env.t}")
+    delivered_count = sum(1 for pkg in env.packages if pkg.status == 'delivered')
+    print(f"Packages Delivered: {delivered_count}/{env.n_packages}")

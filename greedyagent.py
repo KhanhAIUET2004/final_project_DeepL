@@ -47,6 +47,7 @@ class GreedyAgents:
         self.state = None
 
         self.is_init = False
+        self.packages_present = dict()
 
     def init_agents(self, state):
         self.state = state
@@ -124,7 +125,7 @@ class GreedyAgents:
             self.update_inner_state(state)
 
         actions = []
-        print("State robot: ", self.robots)
+        # print("State robot: ", self.robots)
         # Start assigning a greedy strategy
         for i in range(self.n_robots):
             # Step 1: Check if the robot is already assigned to a package
@@ -164,7 +165,45 @@ class GreedyAgents:
                 else:
                     actions.append(('S', '0'))
 
-        print("N robots = ", len(self.robots))
-        print("Actions = ", actions)
-        print(self.robots_target)
+        # print("N robots = ", len(self.robots))
+        # print("Actions = ", actions)
+        # print(self.robots_target)
         return actions
+    def state_to_agent(self, state):
+        packages_in_carry = set()
+        if state['time_step'] == 0:
+            self.packages_present = dict()
+        if len(state['packages']) > 0:
+            for package in state['packages']:
+                package_id = package[0]
+                x, y, target_x, target_y, start_time, deadline = package[1:]
+                status = 'waiting'
+                self.packages_present[package_id] = {
+                    'x': x,
+                    'y': y,
+                    'target_x': target_x,
+                    'target_y': target_y,
+                    'start_time': start_time,
+                    'deadline': deadline,
+                    'status': status
+                }
+        for robot in state['robots']:
+            package_carry = robot[2]
+            if package_carry > 0:
+                self.packages_present[package_carry]['status'] = 'carrying'
+                self.packages_present[package_carry]['x'] = robot[0]
+                self.packages_present[package_carry]['y'] = robot[1]
+                packages_in_carry.add(package_carry)
+        for package_id in self.packages_present:
+            if self.packages_present[package_id]['status'] == 'carrying' and package_id not in packages_in_carry:
+                self.packages_present[package_id]['status'] = 'Delivered'
+        state = {
+            'robots': state['robots'],
+            'packages':[(package_id, self.packages_present[package_id]['x'], self.packages_present[package_id]['y'], self.packages_present[package_id]['target_x'], self.packages_present[package_id]['target_y'], self.packages_present[package_id]['start_time'], self.packages_present[package_id]['deadline'], self.packages_present[package_id]['status'])for package_id in self.packages_present],
+            'map': state['map'],
+            'time': state['time_step']
+        }
+        print('//////////////////////////////////////////////////////////////////')
+        print('State to agent: ', state['packages'])
+        print('//////////////////////////////////////////////////////////////////')
+        return state
